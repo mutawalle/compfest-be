@@ -16,7 +16,7 @@ from io import BytesIO
 
 
 app = FastAPI()
-genai.configure(api_key="AIzaSyC02LutkJr3Xn98g1tcR0eyfsXETB_JLQk")
+genai.configure(api_key="AIzaSyDA501iLj4OCrNy-A1aFlXpxo81cMKkqCY")
 model = genai.GenerativeModel(model_name="gemini-1.5-flash")
 
 app.add_middleware(
