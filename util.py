@@ -1,6 +1,6 @@
 import cv2
 from bson.binary import Binary
-from config import audioCollection, frameCollection, userCollection
+from config import audioCollection, frameCollection, questionCollection
 import os
 from const import UPLOAD_DIRECTORY
 from moviepy.editor import VideoFileClip
@@ -18,16 +18,22 @@ modelHand = mp_hands.Hands()
 
 async def readVideo(video_location, decoded_token, uuid):
     try:
+        question = questionCollection.find_one({"id": uuid})
+        print("read video start")
         video_capture = cv2.VideoCapture(video_location)
 
         frames = []
 
         if not video_capture.isOpened():
-            print("Error: Could not open video.")
-            return frames
+            raise Exception("failed to read video")
 
         fps = video_capture.get(cv2.CAP_PROP_FPS)
         frame_interval = int(fps / 6)
+        print("read video done")
+        messages = question["messages"]
+        messages.append("read video done")
+        question["messages"] = messages        
+        questionCollection.find_one_and_update({"id": uuid},{ "$set": { "messages": messages}})
 
         print("frame start")
         frame_count = 0
@@ -44,6 +50,10 @@ async def readVideo(video_location, decoded_token, uuid):
 
         video_capture.release()
         print("frame done")
+        messages = question["messages"]
+        messages.append("frame done")
+        question["messages"] = messages        
+        questionCollection.find_one_and_update({"id": uuid},{ "$set": { "messages": messages}})
 
         print(f"frame length: {len(frames)}")
         print("emotions start")
@@ -51,6 +61,7 @@ async def readVideo(video_location, decoded_token, uuid):
         handsPositionX = []
         handsPositionY = []
         for frame in frames:
+            print("oke")
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
@@ -59,7 +70,7 @@ async def readVideo(video_location, decoded_token, uuid):
                 x, y, w, h = faces[0]
                 cropped = frame[y:y+h, x:x+w]
                 async with httpx.AsyncClient() as client:
-                    response = await client.post("http://localhost:7861/predict", json={ "matrix": cropped.tolist()})
+                    response = await client.post("https://mutawallle-emotion-detector.hf.space/predict", json={ "matrix": cropped.tolist()})
                     response.raise_for_status()
                     data = response.json()
                     emotions.append(data["prediction"])
@@ -67,6 +78,10 @@ async def readVideo(video_location, decoded_token, uuid):
                 emotions.append(-1)
 
         print("emotions done")
+        messages = question["messages"]
+        messages.append("emotions done")
+        question["messages"] = messages        
+        questionCollection.find_one_and_update({"id": uuid},{ "$set": { "messages": messages}})
 
         print("hand start")
         for frame in frames:
@@ -93,6 +108,10 @@ async def readVideo(video_location, decoded_token, uuid):
         for i in range(len(handsPositionXnp)):
             handsResult.append(math.sqrt(handsPositionXnp[i]**2 + handsPositionYnp[i]**2))
         print("hand done")
+        messages = question["messages"]
+        messages.append("hand done")
+        question["messages"] = messages        
+        questionCollection.find_one_and_update({"id": uuid},{ "$set": { "messages": messages}})
 
         # frames_binary = []
         # for frame in frames:
@@ -104,7 +123,7 @@ async def readVideo(video_location, decoded_token, uuid):
         audioFile = videoFile.audio
         if audioFile == None:
             print("Your video doesn't have audio")
-            raise Exception
+            raise Exception("Your video doesn't have audio")
         audioFile.write_audiofile(str(audio_location))
         audioFile.close()
         videoFile.close()
@@ -116,39 +135,39 @@ async def readVideo(video_location, decoded_token, uuid):
             audio = recognizer.record(source)
         text = recognizer.recognize_google(audio, language="id-ID")
         print("translate done")
+        messages = question["messages"]
+        messages.append("translate done")
+        question["messages"] = messages        
+        questionCollection.find_one_and_update({"id": uuid},{ "$set": { "messages": messages}})
         print("snr start")
         audio, ser = librosa.load(str(audio_location), sr=None)
 
         snr_values = compute_snr(audio, ser)
         arr_cleaned = np.nan_to_num(snr_values, nan=0.0)
         print("snr done")
+        messages = question["messages"]
+        messages.append("snr done")
+        question["messages"] = messages        
+        questionCollection.find_one_and_update({"id": uuid},{ "$set": { "messages": messages}})
 
         print("mongo function")
         # for frame in frames_binary:
         frameCollection.insert_one({"id": uuid, "email": decoded_token["email"], "emotions": emotions, "hands": handsResult})
         audioCollection.insert_one({"id": uuid, "email": decoded_token["email"], "snr": arr_cleaned.tolist(), "answer": text})
-        user = userCollection.find_one({"email": decoded_token["email"]})
-        videos = user["videos"]
-        for video in videos:
-            if video["id"] == uuid:
-                video["status"] = "SUCCESS"
-        
-        userCollection.find_one_and_update({"email": decoded_token["email"]},{ "$set": { "videos": videos}})
+        messages = question["messages"]
+        messages.append("all done")
+        question["messages"] = messages        
+        questionCollection.find_one_and_update({"id": uuid},{ "$set": { "messages": messages, "status": "SUCCESS", "answer": text}})
 
         os.remove(video_location)
         os.remove(audio_location)
         print("all done")
     except Exception as e:
         print(e)
-        user = userCollection.find_one({"email": decoded_token["email"]})
-        videos = user["videos"]
-        for video in videos:
-            if video["id"] == uuid:
-                video["status"] = "ERROR"
-        
-        userCollection.find_one_and_update({"email": decoded_token["email"]},{ "$set": { "videos": videos}})
-
-
+        messages = question["messages"]
+        messages.append(str(e))
+        question["messages"] = messages        
+        questionCollection.find_one_and_update({"id": uuid},{ "$set": { "messages": messages, "status": "ERROR"}})
 
 def compute_snr(audio, sr, frame_length=1024, hop_length=512):
     stft = librosa.stft(audio, n_fft=frame_length, hop_length=hop_length)
