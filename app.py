@@ -8,6 +8,7 @@ from util import readVideo
 import numpy as np
 import uuid
 from pathlib import Path
+import os
 
 app = FastAPI()
 
@@ -22,7 +23,7 @@ app.add_middleware(
 
 @app.middleware("http")
 async def verify_token(request: Request, call_next):
-    if request.url.path not in ["/login"]:
+    if request.url.path not in ["/login", "/"]:
         token = request.headers.get("Authorization")
         if token:
             token = token.split("Bearer ")[1]
@@ -33,6 +34,10 @@ async def verify_token(request: Request, call_next):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Token required")
     response = await call_next(request)
     return response
+
+@app.get("/")
+def hello():
+    return "Hello World"
 
 @app.get("/login")
 async def login(request: Request):
@@ -69,13 +74,15 @@ async def upload_video(request: Request, background_tasks: BackgroundTasks, file
             videos = [{
                 "id": newUuid,
                 "questions": question,
-                "status": "UPLOADED"
+                "status": "UPLOADED",
+                "messages": ["uploaded"]
             }]
         else:
             videos.append({
                 "id": newUuid,
                 "questions": question,
-                "status": "UPLOADED"
+                "status": "UPLOADED",
+                "messages": ["uploaded"]
             })
         userCollection.find_one_and_update({"email": decoded_token["email"]}, {"$set": { "videos": videos }})
         background_tasks.add_task(readVideo, file_location, decoded_token, newUuid)
@@ -93,7 +100,11 @@ async def get_data_all(request: Request):
 
         user = userCollection.find_one({"email": decoded_token["email"]})
         if user:
-            return {"user": user}
+            return {"user": {
+                "email": user["email"],
+                "videos": user["videos"],
+                "created_at": user["created_at"],
+            }}
         else:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
         
@@ -136,6 +147,27 @@ async def reset(request: Request):
         return {"message": "OK"}
     else:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Token required")
+
+@app.delete("/delete-all-files/")
+async def delete_all_files():
+
+    video_extensions = [".mp4", ".avi"] 
+    audio_extensions = [".wav", ".mp3"] 
+    deleted_files = []
+
+    for file in os.listdir(UPLOAD_DIRECTORY):
+        file_path = UPLOAD_DIRECTORY / file
+        if file_path.is_file() and (any(file.endswith(ext) for ext in video_extensions) or any(file.endswith(ext) for ext in audio_extensions)):
+            try:
+                os.remove(file_path)
+                deleted_files.append(file_path)
+            except Exception as e:
+                print(f"Error deleting file {file_path}: {e}")
+    
+    if len(deleted_files) == 0:
+        return {"message": "No video or audio files were deleted. No matching files found."}
+    
+    return {"message": f"Deleted files: {deleted_files}"}
 
 if __name__ == "__main__":
     import uvicorn
