@@ -1,7 +1,6 @@
-from fastapi import FastAPI, HTTPException, status, Request, File, UploadFile, BackgroundTasks, Form, Body
+from fastapi import FastAPI, HTTPException, status, Request, File, UploadFile, BackgroundTasks, Form, Body, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
 import datetime
-import jwt
 from config import userCollection, frameCollection, audioCollection, vacancyCollection, questionCollection
 from const import UPLOAD_DIRECTORY
 from util import readVideo
@@ -13,12 +12,12 @@ import google.generativeai as genai
 import json
 import pdfplumber
 from io import BytesIO
+from collections import Counter
 
 
 app = FastAPI()
 genai.configure(api_key="AIzaSyDA501iLj4OCrNy-A1aFlXpxo81cMKkqCY")
 model = genai.GenerativeModel(model_name="gemini-1.5-flash")
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -27,16 +26,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
 @app.middleware("http")
 async def verify_token(request: Request, call_next):
-    if request.url.path not in ["/login", "/"]:
+    if request.url.path not in ["/login", "/", "/cv"]:
         token = request.headers.get("Authorization")
         if token:
-            token = token.split("Bearer ")[1]
-            decoded_token = jwt.decode(token, options={"verify_signature": False}, algorithms=["RS256"])
-            if decoded_token["exp"] < 300:
-                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token expired")
+            pass
         else:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Token required")
     response = await call_next(request)
@@ -48,18 +43,18 @@ def hello():
 
 @app.get("/login")
 async def login(request: Request):
-    token = request.headers.get("Authorization")
-    if token:
-        token = token.split("Bearer ")[1]
-        decoded_token = jwt.decode(token, options={"verify_signature": False}, algorithms=["RS256"])
-        user = userCollection.find_one({"email": decoded_token["email"]})
+    try:
+        email = json.loads(request.headers.get("Userinfo"))["email"]
+        user = userCollection.find_one({"email": email})
         if not user:
-            new_user = {"email": decoded_token["email"], "videos": [], "created_at": datetime.datetime.now()}
+            new_user = {"email": email, "created_at": datetime.datetime.now()}
             userCollection.insert_one(new_user)
             return {"message": "New user created"}
-        return decoded_token
-    else:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Token required")
+        del user["_id"]
+        return user
+    except Exception as e:
+        print(e)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 @app.get("/reset")
 async def reset(request: Request):
@@ -99,13 +94,14 @@ async def add_vacancy(request: Request, body = Body(...)):
         token = request.headers.get("Authorization")
         if token:
             token = token.split("Bearer ")[1]
-            decoded_token = jwt.decode(token, options={"verify_signature": False}, algorithms=["RS256"])
+            email = json.loads(request.headers.get("Userinfo"))["email"]
             newUuidVacancy = uuid.uuid4().hex
             vacancyCollection.insert_one({
                 "id": newUuidVacancy,
-                "email": decoded_token["email"],
+                "email": email,
                 "title": body["title"],
-                "description": body["description"]
+                "description": body["description"],
+                "created_at": datetime.datetime.now()
             })
             prompt = 'Berikut merupakan deskripsi sebuah lowongan pekerjaan. posisi: ' + body["title"] + ' deskripsi: ' + body["description"] + '. Bisakah kamu memberikan beberapa pertanyaan yang mungkin digunakan dalam sesi wawancara. Tolong berikan jawaban dalam format JSON sebagai berikut: {"questions": [{"question": "question1", "example_answer": "answer1"},{"question": "question2", "example_answer": "answer2"},...]} tanpa tambahan karakter apapun termasuk ```json ```.'
             response = model.generate_content([prompt])
@@ -116,12 +112,13 @@ async def add_vacancy(request: Request, body = Body(...)):
                 newUuidQuestion = uuid.uuid4().hex
                 questionCollection.insert_one({
                     "id": newUuidQuestion,
-                    "email": decoded_token["email"],
+                    "email": email,
                     "vacancy_id": newUuidVacancy,
                     "question": question["question"],
                     "example_answer": question["example_answer"],
                     "status": "NO_VIDEO",
-                    "messages": ["no video"]
+                    "messages": ["no video"],
+                    "created_at": datetime.datetime.now()
                 })
             
             return {"id": newUuidVacancy}
@@ -136,8 +133,8 @@ async def get_vacancy(request: Request):
         token = request.headers.get("Authorization")
         if token:
             token = token.split("Bearer ")[1]
-            decoded_token = jwt.decode(token, options={"verify_signature": False}, algorithms=["RS256"])
-            vacancies = vacancyCollection.find({"email": decoded_token["email"]})
+            email = json.loads(request.headers.get("Userinfo"))["email"]
+            vacancies = vacancyCollection.find({"email": email})
             listVacancies = list(vacancies)
             for vacancy in listVacancies:
                 del vacancy["_id"]
@@ -168,24 +165,56 @@ async def get_question_by_id(id: str):
 @app.get("/question-result/{id}")
 async def get_question_result(id: str):
     try:
+        question = questionCollection.find_one({"id": id})
         frame = frameCollection.find_one({"id": id})
         audio = audioCollection.find_one({"id": id})
+        if not question:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Question not found")
         if not frame:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Frame not found")
         if not audio:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Audio not found")
+        
+        prompt = """Berikut adalah pertanyaan dan jawaban dari sebuah interview. pertanyaan: {question}. jawaban: {answer}.
+                Berikan analisis berdasarkan jawaban tersebut.
+                Berikan jawaban yang mengandung 
+                    summary: Tinjauan singkat tentang seberapa baik jawaban.
+                    improvement: list saran tentang bagaimana kandidat dapat meningkatkan jawaban mereka dan alasannya.
+                    relevance: seberapa sesuai jawaban dalam angka 0-1.
+                    clarity: seberapa jelas kalimat yang digunakan dalam angka 0-1.
+                    originality: originilitas dalam angka 0-1.
+                Berikan jawaban dalam format json sebagai berikut {{"summary": "long text", improvement: ["satu", "dua",...], "relevance": 0.1, "clarity": 0.6, "originality": 0.4}} tanpa tambahan karakter apapun termasuk ```json```"""
+        formatted = prompt.format(question=question["question"], answer=question["answer"])
+        response = model.generate_content([formatted])
+        responseJson = json.loads(response.text)
+        length = len(frame["emotions"])
+        averageHand = sum(frame["hands"]) / len(frame["hands"])*4*10
+        prompt2 = f"Seorang melakukan wawancara dengan rata-rata perubahan gesture tangan {averageHand}cm per detik. beri nilai 0-1 dalam angka tanpa ada tambahan karakter apapun termasuk enter, titik, dsb"
+        response2 = model.generate_content([prompt2])
 
+        possible_items = {0, 1, 2, 3, 4, 5, 6}
+        emotionTexts = ["angry", "disgust", "fear", "happy", "neutral", "sad", "surprise"]
+
+            
+        frequency = Counter(frame["emotions"])
+        frequency_with_all_items = {item: frequency.get(item, 0) for item in possible_items}
+        for i in range(7):
+            frequency_with_all_items[emotionTexts[i]] = frequency_with_all_items.pop(i)/length
         return {
-            "frame": {
-                "emotions": frame["emotions"], 
-                "hands": frame["hands"] 
-            }, 
-            "audio": {
-                "snr": audio["snr"],
-                "answer": audio["answer"]
-            }
+            "question": question["question"],
+            "answer": question["answer"],
+            "summary": responseJson["summary"],
+            "improvement": responseJson["improvement"],
+            "relevance": responseJson["relevance"],
+            "clarity": responseJson["clarity"],
+            "originality": responseJson["originality"],
+            "engagement": float(response2.text),
+            "emotion": frequency_with_all_items, 
+            "body": frame["hands"],
+            "voice": audio["snr"]
         }
-    except:
+    except Exception as e:
+        print(e)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 @app.get("/questions-by-vacancy/{id}")
@@ -205,8 +234,8 @@ async def get_questions(request: Request):
         token = request.headers.get("Authorization")
         if token:
             token = token.split("Bearer ")[1]
-            decoded_token = jwt.decode(token, options={"verify_signature": False}, algorithms=["RS256"])
-            questions = questionCollection.find({"email": decoded_token["email"], "status": { "$in": ["SUCCESS", "UPLOADED"]}})
+            email = json.loads(request.headers.get("Userinfo"))["email"]
+            questions = questionCollection.find({"email": email, "status": { "$in": ["SUCCESS", "UPLOADED"]}})
             listQuestions = list(questions)
             for question in listQuestions:
                 del question["_id"]
@@ -222,7 +251,7 @@ async def add_question(request: Request, background_tasks: BackgroundTasks, file
         token = request.headers.get("Authorization")
         if token:
             token = token.split("Bearer ")[1]
-            decoded_token = jwt.decode(token, options={"verify_signature": False}, algorithms=["RS256"])
+            email = json.loads(request.headers.get("Userinfo"))["email"]
             newUuid = uuid.uuid4().hex
 
             response = model.generate_content([f"berikan contoh jawaban untuk pertanyaan wawancara ini. {question}"])
@@ -235,14 +264,15 @@ async def add_question(request: Request, background_tasks: BackgroundTasks, file
 
             questionCollection.insert_one({
                 "id": newUuid,
-                "email": decoded_token["email"],
+                "email": email,
                 "vacancy_id": "-",
                 "question": question,
                 "example_answer": response.text,
                 "status": "UPLOADED",
-                "messages": ["no video", "uploaded"]
+                "messages": ["no video", "uploaded"],
+                "created_at": datetime.datetime.now()
             })
-            background_tasks.add_task(readVideo, file_location, decoded_token, newUuid)
+            background_tasks.add_task(readVideo, file_location, email, newUuid)
 
             return {"message": "uploaded and analyzing started"}
         else:
@@ -256,7 +286,7 @@ async def answer_question(request: Request, background_tasks: BackgroundTasks, f
         token = request.headers.get("Authorization")
         if token:
             token = token.split("Bearer ")[1]
-            decoded_token = jwt.decode(token, options={"verify_signature": False}, algorithms=["RS256"])
+            email = json.loads(request.headers.get("Userinfo"))["email"]
 
             file_extension = Path(file.filename).suffix
             file_location = UPLOAD_DIRECTORY / f"{id}{file_extension}"
@@ -270,7 +300,7 @@ async def answer_question(request: Request, background_tasks: BackgroundTasks, f
             question["messages"] = messages        
             questionCollection.find_one_and_update({"id": id},{ "$set": { "messages": messages, "status": "UPLOADED"}})
 
-            background_tasks.add_task(readVideo, file_location, decoded_token, id)
+            background_tasks.add_task(readVideo, file_location, email, id)
 
             return {"message": "uploaded and analyzing started"}
         else:
@@ -287,9 +317,19 @@ async def analyze_cv(file: UploadFile = File(...), job_title: str = Form(...), d
             text = ""
             for page in pdf.pages:
                 text += page.extract_text()
-        prompt = f"Berikut adalah text dari sebuah Resume. {text}. Berikan analisis kesesuaian Resume tersebut berdasarkan lowongan pekerjaan ini. nama lowongan: {job_title} dan deskripsi: {description}"
-        response = model.generate_content([prompt])
-        return {"result": response.text}
+        prompt = """Berikut adalah text dari sebuah Resume. {text}. 
+                Berikan analisis kesesuaian Resume tersebut berdasarkan lowongan pekerjaan ini. nama lowongan: {job_title} dan deskripsi: {description}. 
+                Berikan jawaban yang mengandung 
+                    summary: Tinjauan singkat tentang seberapa baik resume.
+                    jobKeywords: Daftar kata kunci yang ideal untuk nama lowongan tersebut.
+                    resumeKeywords: Daftar kata kunci yang ditemukan dalam resume kandidat.
+                    RelevanceScore: Skor yang menunjukkan seberapa baik pengalaman kandidat selaras dengan persyaratan pekerjaan.
+                    quantifiedScore: Skor yang menunjukkan tingkat kuantifikasi dalam resume (misalnya, menggunakan metrik untuk mengukur pencapaian).
+                    improvement: list saran tentang bagaimana kandidat dapat meningkatkan resume mereka dan alasannya.
+                Berikan jawaban dalam format json sebagai berikut {{"summary": "long text", "jobKeywords": ["satu", "dua",...], "resumeKeywords": ["satu", "dua",...], RelevanceScore: number, quantifiedScore: number, improvement: ["satu", "dua",...]}} tanpa tambahan karakter apapun termasuk ```json```"""
+        formatted = prompt.format(text=text, job_title=job_title, description=description)
+        response = model.generate_content([formatted])
+        return json.loads(response.text)
     except:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
 

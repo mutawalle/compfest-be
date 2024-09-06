@@ -16,7 +16,7 @@ face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_fronta
 mp_hands = mp.solutions.hands
 modelHand = mp_hands.Hands()
 
-async def readVideo(video_location, decoded_token, uuid):
+async def readVideo(video_location, email, uuid):
     try:
         question = questionCollection.find_one({"id": uuid})
         print("read video start")
@@ -152,8 +152,8 @@ async def readVideo(video_location, decoded_token, uuid):
 
         print("mongo function")
         # for frame in frames_binary:
-        frameCollection.insert_one({"id": uuid, "email": decoded_token["email"], "emotions": emotions, "hands": handsResult})
-        audioCollection.insert_one({"id": uuid, "email": decoded_token["email"], "snr": arr_cleaned.tolist(), "answer": text})
+        frameCollection.insert_one({"id": uuid, "email": email, "emotions": emotions, "hands": handsResult})
+        audioCollection.insert_one({"id": uuid, "email": email, "snr": arr_cleaned.tolist(), "answer": text})
         messages = question["messages"]
         messages.append("all done")
         question["messages"] = messages        
