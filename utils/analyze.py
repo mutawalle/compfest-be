@@ -131,7 +131,7 @@ async def analyze_emotions(frames):
             x, y, w, h = faces[0]
             cropped = frame[y:y+h, x:x+w]
             async with httpx.AsyncClient() as client:
-                response = await client.post("https://mutawallle-emotion-detector.hf.space/predict", json={ "matrix": cropped.tolist()})
+                response = await client.post(os.getenv('API_EMOTION_URL'), json={ "matrix": cropped.tolist()})
                 response.raise_for_status()
                 data = response.json()
                 emotions.append(data["prediction"])
