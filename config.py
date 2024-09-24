@@ -3,8 +3,9 @@ import google.generativeai as genai
 import cv2
 import mediapipe as mp
 import speech_recognition as sr
+import os
 
-client = pymongo.MongoClient('mongodb+srv://mutawallynawwar:7WAjgvIb4egLmTEV@cluster0.mrgy4.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0')
+client = pymongo.MongoClient(os.getenv('MONGO_CONN_URL'))
 
 db = client.compfest
 
@@ -14,7 +15,7 @@ questionCollection = db["question"]
 frameCollection = db["frame"]
 audioCollection = db["audio"]
 
-genai.configure(api_key="AIzaSyDA501iLj4OCrNy-A1aFlXpxo81cMKkqCY")
+genai.configure(api_key=os.getenv('GEMINI_API_KEY'))
 model = genai.GenerativeModel(model_name="gemini-1.5-flash")
 
 recognizer = sr.Recognizer()

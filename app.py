@@ -1,6 +1,9 @@
 from fastapi import FastAPI, HTTPException, status, Request
 from fastapi.middleware.cors import CORSMiddleware
 from routers import question_router, cv_router, basic_router, vacancy_router
+from dotenv import load_dotenv
+
+load_dotenv()
 
 app = FastAPI()
 
