@@ -27,7 +27,7 @@ The system to be developed is a simulation and recommendation system for Indones
 | --------------------- | --------------------------- |
 | Ilmagita Nariswari    | 18221101@std.stei.itb.ac.id |
 | Muhammad Rizky Sya'ban| 13521119@std.stei.itb.ac.id |
-| Mutawally Nawwar      | 13521166@std.stei.itb.ac.id |
+| Mutawally Nawwar      | 13521065@std.stei.itb.ac.id |
 
 <a name="technologies-used"></a>
 
