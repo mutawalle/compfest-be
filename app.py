@@ -1,9 +1,13 @@
 from fastapi import FastAPI, HTTPException, status, Request
 from fastapi.middleware.cors import CORSMiddleware
-from routers import question_router, cv_router, basic_router, vacancy_router
+import os
 from dotenv import load_dotenv
 
 load_dotenv()
+os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = os.getenv('GOOGLE_CREDENTIAL')
+
+from routers import question_router, cv_router, basic_router, vacancy_router
+
 
 app = FastAPI()
 

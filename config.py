@@ -4,8 +4,10 @@ import cv2
 import mediapipe as mp
 import speech_recognition as sr
 import os
+from google.cloud import storage
 
-client = pymongo.MongoClient(os.getenv('MONGO_CONN_URL'))
+
+client = pymongo.MongoClient('mongodb+srv://mutawallynawwar:7WAjgvIb4egLmTEV@cluster0.mrgy4.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0')
 
 db = client.compfest
 
@@ -21,4 +23,8 @@ model = genai.GenerativeModel(model_name="gemini-1.5-flash")
 recognizer = sr.Recognizer()
 faceCascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
 mpHands = mp.solutions.hands
+mpDrawing = mp.solutions.drawing_utils
 modelHand = mpHands.Hands()
+
+googleClient = storage.Client()
+bucket = googleClient.get_bucket(os.getenv("BUCKET_NAME"))

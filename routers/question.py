@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, status, Request, BackgroundTasks, UploadFile, File, Form
+from fastapi import APIRouter, HTTPException, status, Request, BackgroundTasks, UploadFile, File, Form, Response
 from config import questionCollection, frameCollection, audioCollection, model
 import json
 from collections import Counter
@@ -7,6 +7,8 @@ from const import UPLOAD_DIRECTORY
 import uuid
 import datetime
 from utils.analyze import analyze
+import os
+from google.cloud import storage
 
 router = APIRouter(prefix="", tags=["question"])
 
@@ -71,7 +73,6 @@ async def get_question_result(id: str):
             "voice": audio["snr"]
         }
     except Exception as e:
-        print(e)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 @router.get("/questions-by-vacancy/{id}")
@@ -114,8 +115,8 @@ async def add_question(request: Request, background_tasks: BackgroundTasks, file
             response = model.generate_content([f"berikan contoh jawaban untuk pertanyaan wawancara ini. {question}"])
 
             file_extension = Path(file.filename).suffix
-            file_location = UPLOAD_DIRECTORY / f"{newUuid}{file_extension}"
-            
+            file_location = UPLOAD_DIRECTORY / f"{id}{file_extension}"
+
             with open(file_location, "wb") as f:
                 f.write(await file.read())
 
@@ -129,6 +130,7 @@ async def add_question(request: Request, background_tasks: BackgroundTasks, file
                 "messages": ["no video", "uploaded"],
                 "created_at": datetime.datetime.now()
             })
+
             background_tasks.add_task(analyze, file_location, email, newUuid)
 
             return {"message": "uploaded and analyzing started"}
@@ -144,7 +146,7 @@ async def answer_question(request: Request, background_tasks: BackgroundTasks, f
         if token:
             token = token.split("Bearer ")[1]
             email = json.loads(request.headers.get("Userinfo"))["email"]
-
+            
             file_extension = Path(file.filename).suffix
             file_location = UPLOAD_DIRECTORY / f"{id}{file_extension}"
             
@@ -153,7 +155,7 @@ async def answer_question(request: Request, background_tasks: BackgroundTasks, f
 
             question = questionCollection.find_one({"id": id})
             messages = question["messages"]
-            messages.routerend("uploaded")
+            messages.append("uploaded")
             question["messages"] = messages        
             questionCollection.find_one_and_update({"id": id},{ "$set": { "messages": messages, "status": "UPLOADED"}})
 
@@ -164,3 +166,25 @@ async def answer_question(request: Request, background_tasks: BackgroundTasks, f
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Token required")
     except:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    
+
+@router.get("/stream/{video_name}")
+async def stream_video(video_name: str, request: Request):
+    bucket = storage.Client().bucket(os.getenv('BUCKET_NAME'))
+    blob = bucket.blob(video_name + ".mp4")
+    byte_range = request.headers.get("range")
+    print(blob.id)
+    
+    if byte_range:
+        start, end = byte_range.replace("bytes=", "").split("-")
+        start = int(start)
+        end = int(end) if end else None
+        file_data = blob.download_as_bytes(start=start, end=end)
+        return Response(content=file_data, status_code=206, headers={
+            "Content-Range": f"bytes {start}-{end}/{blob.size}",
+            "Accept-Ranges": "bytes",
+            "Content-Length": str(len(file_data)),
+            "Content-Type": "video/mp4",
+        })
+    else:
+        return Response(content=blob.download_as_bytes(), media_type="video/mp4")
