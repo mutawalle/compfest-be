@@ -51,14 +51,10 @@ async def get_question_result(id: str):
         prompt2 = f"Seorang melakukan wawancara dengan rata-rata perubahan gesture tangan {averageHand}cm per detik. beri nilai 0-1 dalam angka tanpa ada tambahan karakter apapun termasuk enter, titik, dsb"
         response2 = model.generate_content([prompt2])
 
-        possible_items = {0, 1, 2, 3, 4, 5, 6}
-        emotionTexts = ["angry", "disgust", "fear", "hroutery", "neutral", "sad", "surprise"]
+        emotionTexts = ["angry", "disgust", "fear", "happy", "neutral", "sad", "surprise"]
+        emotion_frequency = Counter(emotionTexts)
+        emotion_frequency_dict = dict(emotion_frequency)
 
-            
-        frequency = Counter(frame["emotions"])
-        frequency_with_all_items = {item: frequency.get(item, 0) for item in possible_items}
-        for i in range(7):
-            frequency_with_all_items[emotionTexts[i]] = frequency_with_all_items.pop(i)/length
         return {
             "question": question["question"],
             "answer": question["answer"],
@@ -68,9 +64,10 @@ async def get_question_result(id: str):
             "clarity": responseJson["clarity"],
             "originality": responseJson["originality"],
             "engagement": float(response2.text),
-            "emotion": frequency_with_all_items, 
+            "emotion": emotion_frequency_dict, 
             "body": frame["hands"],
-            "voice": audio["snr"]
+            "voice": audio["snr"],
+            "result": question["result"]
         }
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -115,7 +112,7 @@ async def add_question(request: Request, background_tasks: BackgroundTasks, file
             response = model.generate_content([f"berikan contoh jawaban untuk pertanyaan wawancara ini. {question}"])
 
             file_extension = Path(file.filename).suffix
-            file_location = UPLOAD_DIRECTORY / f"{id}{file_extension}"
+            file_location = UPLOAD_DIRECTORY / f"{newUuid}{file_extension}"
 
             with open(file_location, "wb") as f:
                 f.write(await file.read())
@@ -173,7 +170,6 @@ async def stream_video(video_name: str, request: Request):
     bucket = storage.Client().bucket(os.getenv('BUCKET_NAME'))
     blob = bucket.blob(video_name + ".mp4")
     byte_range = request.headers.get("range")
-    print(blob.id)
     
     if byte_range:
         start, end = byte_range.replace("bytes=", "").split("-")

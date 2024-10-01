@@ -8,7 +8,27 @@ import librosa
 import httpx
 import speech_recognition as sr
 import math
-from config import modelHand, faceCascade, recognizer, mpDrawing, mpHands, bucket
+from config import modelHand, faceCascade, recognizer, mpDrawing, mpHands, bucket, model
+import io
+from google.cloud import speech_v1p1beta1 as speech
+import json
+import wave
+from pydub import AudioSegment
+from PIL import Image
+from tensorflow.keras.models import load_model
+
+emotionModel = load_model(os.getenv("EMOTION_MODEL"))
+
+emotionMapping = {
+    0: "angry",
+    1: "disgust",
+    2: "fear",
+    3: "happy",
+    4: "neutral",
+    5: "sad",
+    6: "surprise",
+}
+
 async def analyze(video_location, email, uuid):
     try:
         question = questionCollection.find_one({"id": uuid})
@@ -33,7 +53,6 @@ async def analyze(video_location, email, uuid):
         frame_width = int(video_capture.get(cv2.CAP_PROP_FRAME_WIDTH))
         frame_height = int(video_capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
         fps = video_capture.get(cv2.CAP_PROP_FPS)
-        # frame_interval = int(fps / 6)
         print("read video done")
         messages = question["messages"]
         messages.append("read video done")
@@ -48,8 +67,6 @@ async def analyze(video_location, email, uuid):
             if not success:
                 break 
 
-            # if frame_count % frame_interval == 0:
-            #     frames.append(frame)
             frames.append(frame)
 
             frame_count += 1
@@ -65,7 +82,8 @@ async def analyze(video_location, email, uuid):
 
         print(f"frame length: {len(frames)}")
         print("emotions start")
-        emotions, frames = await analyze_emotions(frames)
+        emotions, frames, faceWidth = await analyze_emotions(frames, fps)
+        print(emotions)
         print("emotions done")
         messages = question["messages"]
         messages.append("emotions done")
@@ -73,7 +91,7 @@ async def analyze(video_location, email, uuid):
         questionCollection.find_one_and_update({"id": uuid},{ "$set": { "messages": messages}})
 
         print("hand start")
-        handsResult, frames = await analyze_hands(frames)
+        handsResult, frames = await analyze_hands(frames, frame_width, frame_height)
         print("hand done")
         messages = question["messages"]
         messages.append("hand done")
@@ -103,10 +121,7 @@ async def analyze(video_location, email, uuid):
         questionCollection.find_one_and_update({"id": uuid},{ "$set": { "messages": messages}})
 
         print("translate start")
-        audio_file = sr.AudioFile(str(audio_location))
-        with audio_file as source:
-            audio = recognizer.record(source)
-        text = recognizer.recognize_google(audio, language="id-ID")
+        resultTranslate, text = translate(str(audio_location), get_sample_rate(str(audio_location)))
         print("translate done")
         messages = question["messages"]
         messages.append("translate done")
@@ -124,13 +139,41 @@ async def analyze(video_location, email, uuid):
         question["messages"] = messages        
         questionCollection.find_one_and_update({"id": uuid},{ "$set": { "messages": messages}})
 
+        print("calculation start")
+        for index, phrase in enumerate(resultTranslate):
+            startIndex = math.floor(phrase["start_time"]*fps)
+            endIndex = math.floor(phrase["end_time"]*fps)
+            movement = 0
+            for i in range(startIndex, endIndex):
+                movement += handsResult[i]
+            if(movement > faceWidth):
+                resultTranslate[index]["actual_gesture"] = True
+            else:
+                resultTranslate[index]["actual_gesture"] = False
+
+        for index, phrase in enumerate(resultTranslate):
+            startIndex = math.floor(phrase["start_time"]*fps)
+            endIndex = math.floor(phrase["end_time"]*fps)
+            actualIndex = (startIndex+endIndex)//2
+            print(actualIndex, emotions[actualIndex])
+            resultTranslate[index]["actual_emotion"] = emotions[actualIndex]
+
+        print(resultTranslate)
+
+
+        print("calculation done")
+        messages = question["messages"]
+        messages.append("calculation done")
+        question["messages"] = messages        
+        questionCollection.find_one_and_update({"id": uuid},{ "$set": { "messages": messages}})
+
         print("mongo function")
         frameCollection.insert_one({"id": uuid, "email": email, "emotions": emotions, "hands": handsResult})
         audioCollection.insert_one({"id": uuid, "email": email, "snr": arr_cleaned.tolist(), "answer": text})
         messages = question["messages"]
         messages.append("all done")
         question["messages"] = messages        
-        questionCollection.find_one_and_update({"id": uuid},{ "$set": { "messages": messages, "status": "SUCCESS", "answer": text}})
+        questionCollection.find_one_and_update({"id": uuid},{ "$set": { "messages": messages, "status": "SUCCESS", "answer": text, "result": resultTranslate}})
 
 
         os.remove(video_location)
@@ -144,32 +187,35 @@ async def analyze(video_location, email, uuid):
         question["messages"] = messages        
         questionCollection.find_one_and_update({"id": uuid},{ "$set": { "messages": messages, "status": "ERROR"}})
 
-async def analyze_emotions(frames):
+async def analyze_emotions(frames, fps):
+    faceWidth = 0
     emotions = []
+    currEmotion = ""
     for index, frame in enumerate(frames):
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         faces = faceCascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
         if len(faces) > 0:
             x, y, w, h = faces[0]
+            faceWidth = w
             for (x, y, w, h) in faces:
                 cv2.rectangle(frame, (x, y), (x+w, y+h), (255, 0, 0), 2)
             cropped = frame[y:y+h, x:x+w]
 
-            currEmotion = ""
-            if(index % 1000 == 0):
-                async with httpx.AsyncClient() as client:
-                    response = await client.post(os.getenv('API_EMOTION_URL'), json={ "matrix": cropped.tolist()})
-                    response.raise_for_status()
-                    data = response.json()
-                    currEmotion = data["prediction"]
-                print(index)
+            if(index % (fps//5) == 0):
+                # async with httpx.AsyncClient() as client:
+                #     response = await client.post(os.getenv('API_EMOTION_URL'), json={ "matrix": cropped.tolist()})
+                #     response.raise_for_status()
+                #     data = response.json()
+                #     currEmotion = data["prediction"]
+                currEmotion = predict(cropped)
+                print(index, currEmotion)
             emotions.append(currEmotion)
         else:
-            emotions.append(-1)
+            emotions.append("unknown")
     
-    return emotions, frames
+    return emotions, frames, faceWidth
 
-async def analyze_hands(frames):
+async def analyze_hands(frames, width, height):
     handsPositionX = []
     handsPositionY = []
     for frame in frames:
@@ -178,12 +224,12 @@ async def analyze_hands(frames):
         if hands.multi_hand_landmarks:
             first_hand = hands.multi_hand_landmarks[0]
             if len(hands.multi_hand_landmarks) == 1:
-                handsPositionX.append(first_hand.landmark[0].x)
-                handsPositionY.append(first_hand.landmark[0].y)
+                handsPositionX.append(first_hand.landmark[0].x*width)
+                handsPositionY.append(first_hand.landmark[0].y*height)
             else:
                 second_hand = hands.multi_hand_landmarks[1]
-                handsPositionX.append((first_hand.landmark[0].x + second_hand.landmark[0].x)/2)
-                handsPositionY.append((first_hand.landmark[0].y + second_hand.landmark[0].y)/2)
+                handsPositionX.append((first_hand.landmark[0].x*width + second_hand.landmark[0].x*width)/2)
+                handsPositionY.append((first_hand.landmark[0].y*height + second_hand.landmark[0].y*height)/2)
 
             for hand_landmarks in hands.multi_hand_landmarks:
                 mpDrawing.draw_landmarks(
@@ -208,6 +254,53 @@ async def analyze_hands(frames):
 
     return handsResult, frames
 
+def translate(speech_file, sample_rate):
+    client = speech.SpeechClient()
+    
+    audio = AudioSegment.from_wav(speech_file)
+    mono_audio = audio.set_channels(1)
+    mono_audio.export(f"final-{speech_file}", format="wav")
+
+    with io.open(f"final-{speech_file}", "rb") as audio_file:
+        content = audio_file.read()
+
+    audio = speech.RecognitionAudio(content=content)
+    config = speech.RecognitionConfig(
+        encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
+        sample_rate_hertz=sample_rate,
+        language_code="id-ID",
+        enable_word_time_offsets=True,
+    )
+
+    response = client.recognize(config=config, audio=audio)
+    prompt = """
+                Split the following text by phrases. Provide an emotion angry/disgust/fear/happy/neutral/sad/surprise for each phrase and indicate whether hand gestures are needed when delivering it. 
+                Here is the text: {transcript}. 
+                Provide the format as an array: [{{"phrase": "text", "emotion": "angry/disgust/fear/happy/neutral/sad/surprise", "gesture": true/false}}]. 
+                Return it as an array without any additional characters or formatting such as ```json``` or backticks.
+            """
+    
+    formatted = prompt.format(transcript=response.results[0].alternatives[0].transcript)
+    resGemini = model.generate_content([formatted])
+    os.remove(f"final-{speech_file}")
+
+    object = json.loads(resGemini.text)
+
+    phraseIndex = 0
+    for word_info in response.results[0].alternatives[0].words:
+        word = word_info.word
+        start_time = word_info.start_time.total_seconds()
+        end_time = word_info.end_time.total_seconds()
+        for i in range(phraseIndex, len(object)):
+            if word.lower() in object[phraseIndex]["phrase"].lower():
+                if "start_time" not in object[phraseIndex]:
+                    object[phraseIndex]["start_time"] = start_time
+                object[phraseIndex]["end_time"] = end_time
+                break
+            else:
+                phraseIndex += 1
+    return object, response.results[0].alternatives[0].transcript
+
 def compute_snr(audio, sr, frame_length=1024, hop_length=512):
     stft = librosa.stft(audio, n_fft=frame_length, hop_length=hop_length)
     power_spec = np.abs(stft)**2
@@ -216,3 +309,25 @@ def compute_snr(audio, sr, frame_length=1024, hop_length=512):
     snr = 10 * np.log10(signal_power / noise_power)
     
     return snr
+
+def get_sample_rate(wav_file):
+    with wave.open(wav_file, 'rb') as wav:
+        sample_rate = wav.getframerate()
+        return sample_rate
+    
+def preprocess(image_array):
+    image_array = image_array / 255.0
+    image_array = np.expand_dims(image_array, axis=0)
+    return image_array
+
+def predict(image_matrix):
+    image = Image.fromarray(image_matrix)
+
+    image = image.resize((48, 48))
+
+    resized_array = np.array(image)
+
+    processed_image = preprocess(resized_array)
+    prediction = emotionModel.predict(processed_image)
+    predicted_class_index = int(np.argmax(prediction, axis=1)[0])
+    return emotionMapping.get(predicted_class_index, "unknown")

@@ -1,31 +1,81 @@
 import speech_recognition as sr
-
-from const import UPLOAD_DIRECTORY
-from moviepy.editor import VideoFileClip
-
-audio_location = UPLOAD_DIRECTORY / f"tes.wav"
-videoFile = VideoFileClip(str("youtube2.mp4"))
-audioFile = videoFile.audio
-if audioFile == None:
-    print("Your video doesn't have audio")
-audioFile.write_audiofile(str(audio_location))
-
-print(audio_location)
-# Initialize recognizer
-recognizer = sr.Recognizer()
-
-# Load the audio file
-audio_file = sr.AudioFile(str(audio_location))  # Replace with your file path
-
-with audio_file as source:
-    audio = recognizer.record(source)
-
-try:
-    text = recognizer.recognize_google(audio, language="id-ID")
-    print("Transcription: ", text)
-except sr.UnknownValueError:
-    print("Google Speech Recognition could not understand audio")
-except sr.RequestError as e:
-    print(f"Could not request results from Google Speech Recognition service; {e}")
+from google.cloud import speech_v1p1beta1 as speech
+import io
+import os
+import wave
+import dotenv
+import google.generativeai as genai
+import json
 
 
+dotenv.load_dotenv()
+
+genai.configure(api_key=os.getenv('GEMINI_API_KEY'))
+model = genai.GenerativeModel(model_name="gemini-1.5-flash")
+
+def get_sample_rate(wav_file):
+    with wave.open(wav_file, 'rb') as wav:
+        sample_rate = wav.getframerate()
+        return sample_rate
+
+sample_rate = get_sample_rate('tes2.wav')
+print(sample_rate)
+
+os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "compfest-434318-f0195f3d3ae4.json"
+
+
+def transcribe_speech_with_timestamps(speech_file):
+    client = speech.SpeechClient()
+
+    with io.open(speech_file, "rb") as audio_file:
+        content = audio_file.read()
+
+    audio = speech.RecognitionAudio(content=content)
+    config = speech.RecognitionConfig(
+        encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
+        sample_rate_hertz=sample_rate,
+        language_code="id-ID",
+        enable_word_time_offsets=True,  # Enable timestamps
+    )
+
+    response = client.recognize(config=config, audio=audio)
+    for word_info in response.results[0].alternatives[0].words:
+        word = word_info.word
+        start_time = word_info.start_time.total_seconds()
+        end_time = word_info.end_time.total_seconds()
+        print(f"{word}  {start_time}   {end_time}")
+        
+    prompt = """
+                Split the following text by phrases. Provide an emotion angry/disgust/fear/happy/neutral/sad/surprise for each phrase and indicate whether hand gestures are needed when delivering it. 
+                Here is the text: {transcript}. 
+                Provide the format as an array: [{{"phrase": "text", "emotion": "angry/disgust/fear/happy/neutral/sad/surprise", "gesture": true/false}}]. 
+                Return it as an array without any additional characters or formatting such as ```json``` or backticks.
+            """
+    
+    formatted = prompt.format(transcript=response.results[0].alternatives[0].transcript)
+
+    # print(formatted)
+
+    resGemini = model.generate_content([formatted])
+
+    object = json.loads(resGemini.text)
+
+    phraseIndex = 0
+    for word_info in response.results[0].alternatives[0].words:
+        word = word_info.word
+        start_time = word_info.start_time.total_seconds()
+        end_time = word_info.end_time.total_seconds()
+        for i in range(phraseIndex, len(object)):
+            if word.lower() in object[phraseIndex]["phrase"].lower():
+                if "start_time" not in object[phraseIndex]:
+                    object[phraseIndex]["start_time"] = start_time
+                object[phraseIndex]["end_time"] = end_time
+                break
+            else:
+                phraseIndex += 1
+
+    print(object)
+
+    
+
+transcribe_speech_with_timestamps("tes2.wav")

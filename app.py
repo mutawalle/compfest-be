@@ -21,7 +21,7 @@ app.add_middleware(
 
 @app.middleware("http")
 async def verify_token(request: Request, call_next):
-    if request.url.path not in ["/login", "/", "/cv"]:
+    if request.url.path not in ["/login", "/", "/cv", "/stream"]:
         token = request.headers.get("Authorization")
         if token:
             pass
