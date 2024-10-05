@@ -51,6 +51,7 @@ async def add_vacancy(request: Request, body = Body(...)):
                         "email": email,
                         "vacancy_id": newUuidVacancy,
                         "question": question["question"],
+                        "category": question["category"],
                         "example_answer": question["example_answer"],
                         "status": "NO_VIDEO",
                         "messages": ["no video"],
