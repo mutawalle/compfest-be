@@ -17,7 +17,7 @@
 <a name="general-information"></a>
 
 ## General Information
-The system to be developed is a simulation and recommendation system for Indonesian students, specifically designed to be disability-friendly, with the aim of assisting individuals with disabilities in choosing their academic majors. The system will offer courses to simulate lectures related to specific majors. It will be capable of displaying top recommendations based on the user's personality, interests, and talents. Additionally, the system will provide an open discussion platform to connect students seeking information about a particular major with current students or professors in that field.  
+A system designed to assist job seekers throughout the selection process, starting with analyzing their CVs and continuing through to practicing interview scenarios. The system provides detailed, personalized feedback and offers suggestions for improvement, helping users refine both their resumes and interview skills. By delivering comprehensive insights and actionable recommendations, it aims to significantly enhance the user's chances of success in their job search.
 
 <a name="member-list"></a>
 

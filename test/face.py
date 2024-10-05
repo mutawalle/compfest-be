@@ -52,6 +52,6 @@ def predict(image_matrix):
     processed_image = preprocess(resized_array)
     prediction = model.predict(processed_image)
     predicted_class_index = int(np.argmax(prediction, axis=1)[0])
-    return emotionMapping.get(predicted_class_index)
+    return emotionMapping.get(predicted_class_index, "unknown")
 
 print(predict(cropped))

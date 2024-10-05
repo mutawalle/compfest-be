@@ -21,12 +21,16 @@ app.add_middleware(
 
 @app.middleware("http")
 async def verify_token(request: Request, call_next):
-    if request.url.path not in ["/login", "/", "/cv", "/stream"]:
-        token = request.headers.get("Authorization")
-        if token:
-            pass
-        else:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Token required")
+    allowed_paths = ["/login", "/"]
+    
+    if request.url.path.startswith("/stream/") or request.url.path in allowed_paths:
+        response = await call_next(request)
+        return response
+
+    token = request.headers.get("Authorization")
+    if not token:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Token required")
+
     response = await call_next(request)
     return response
 

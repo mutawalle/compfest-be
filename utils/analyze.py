@@ -109,7 +109,17 @@ async def analyze(video_location, email, uuid):
         newVideo = VideoFileClip(str(new_video_location))
         newAudio = AudioFileClip(str(audio_location)).set_duration(newVideo.duration)
         newVideo = newVideo.set_audio(newAudio)
-        newVideo.write_videofile(str(video_location), codec='libx264', audio_codec='aac')
+        file_extension = os.path.splitext(video_location)[-1].lower()
+
+        if file_extension == ".mp4":
+            codec = 'libx264'
+            audio_codec = 'aac'
+        elif file_extension == ".webm":
+            codec = 'libvpx'
+            audio_codec = 'libvorbis'
+        else:
+            raise ValueError(f"Unsupported video format: {file_extension}")
+        newVideo.write_videofile(str(video_location), codec=codec, audio_codec=audio_codec)
         newVideo.close()
         newAudio.close()
         blob = bucket.blob(str(video_location))
@@ -272,7 +282,8 @@ def translate(speech_file, sample_rate):
         enable_word_time_offsets=True,
     )
 
-    response = client.recognize(config=config, audio=audio)
+    operation = client.long_running_recognize(config=config, audio=audio)
+    response = operation.result(timeout=500)
     prompt = """
                 Split the following text by phrases. Provide an emotion angry/disgust/fear/happy/neutral/sad/surprise for each phrase and indicate whether hand gestures are needed when delivering it. 
                 Here is the text: {transcript}. 
@@ -331,3 +342,44 @@ def predict(image_matrix):
     prediction = emotionModel.predict(processed_image)
     predicted_class_index = int(np.argmax(prediction, axis=1)[0])
     return emotionMapping.get(predicted_class_index, "unknown")
+
+async def analyzeCode(video_location, uuid, code):
+    try:
+        question = questionCollection.find_one({"id": uuid})
+
+        print("read video start")
+        video_capture = cv2.VideoCapture(video_location)
+        audio_location = UPLOAD_DIRECTORY / f"{uuid}.wav"
+        videoFile = VideoFileClip(str(video_location))
+        audioFile = videoFile.audio
+        if audioFile == None:
+            print("Your video doesn't have audio")
+            raise Exception("Your video doesn't have audio")
+        audioFile.write_audiofile(str(audio_location))
+        audioFile.close()
+        videoFile.close()
+
+        print("translate start")
+        resultTranslate, text = translate(str(audio_location), get_sample_rate(str(audio_location)))
+        print("translate done")
+        messages = question["messages"]
+        messages.append("translate done")
+        question["messages"] = messages        
+        questionCollection.find_one_and_update({"id": uuid},{ "$set": { "messages": messages}})
+
+        print("mongo function")
+        messages = question["messages"]
+        messages.append("all done")
+        question["messages"] = messages        
+        questionCollection.find_one_and_update({"id": uuid},{ "$set": { "messages": messages, "status": "SUCCESS", "answer": text, "code": code, "result": resultTranslate}})
+
+
+        os.remove(video_location)
+        os.remove(audio_location)
+        print("all done")
+    except Exception as e:
+        print(e)
+        messages = question["messages"]
+        messages.append(str(e))
+        question["messages"] = messages        
+        questionCollection.find_one_and_update({"id": uuid},{ "$set": { "messages": messages, "status": "ERROR"}})

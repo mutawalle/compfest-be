@@ -16,6 +16,7 @@ vacancyCollection = db["vacancy"]
 questionCollection = db["question"]
 frameCollection = db["frame"]
 audioCollection = db["audio"]
+cvCollection = db["cv"]
 
 genai.configure(api_key=os.getenv('GEMINI_API_KEY'))
 model = genai.GenerativeModel(model_name="gemini-1.5-flash")
