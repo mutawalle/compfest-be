@@ -12,7 +12,6 @@
 - [Technologies Used](#technologies-used)
 - [Setup n Run](#setup)
 - [Additional Information](#additional-information)
-- [](#)
 
 <a name="general-information"></a>
 
